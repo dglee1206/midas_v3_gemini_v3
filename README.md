@@ -86,7 +86,7 @@ BINGX_API_KEY=your_bingx_api_key
 BINGX_SECRET=your_bingx_secret
 ```
 
-#### 3. 봇 핵심 코드 (bot_core.py)
+#### 3. 봇 핵심 코드 (crypto_bot.py)
 
 ```python
 import asyncio
@@ -105,15 +105,89 @@ class CryptoBot:
         self.exchanges = {
             "binance": ccxt.binance({
                 "apiKey": os.environ.get("BINANCE_API_KEY", ""),
-                "secret": os.environ.get("BINANCE_SECRET", ""),
-                "enableRateLimit": True,    # API 차단 방지
-                "options": {'defaultType': 'future'}    # 선물 거래 설정
+                "secret": os.environ.get("BINANCE_SECRET_KEY", ""),
+                "enableRateLimit": True,  # API 차단 방지
+                "options": {"defaultType": "future"}  # 선물 거래 설정
             }),
             "bingx": ccxt.bingx({
                 "apiKey": os.environ.get("BINGX_API_KEY", ""),
-                "secret": os.environ.get("BINGX_SECRET", ""),
+                "secret": os.environ.get("BINGX_SECRET_KEY", ""),
                 "enableRateLimit": True,
-                "options": {'defaultType': 'swap'}
-            }),
+                "options": {"defaultType": "future"}
+            })
         }
+        self.symbol = "BTC/USDT"
+        self.timeframe = '1m'   # 스캘핑용 1분봉
+
+    async def fetch_data(self, exchange_name):
+        """가격 데이터 및 캔들 데이터를 가져옴."""
+        exchange = self.exchanges[exchange_name]
+        try:
+            # 현재가 조회 (Ticker)
+            ticker = await exchange.fetch_ticker(self.symbol)
+            current_price = ticker['last']
+
+            # 과거 캔들 조회 (OHLCV) -EMA 계산용 (최근 30개만)
+            ohlcv = await exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=30)
+
+            return current_price, ohlcv
+        except Exception as e:
+            print(f"[{exchange_name}] Error: {e}")
+            return None, None
+
+    def calculate_ema(self, ohlcv, span=20):
+        """Pandas를 이용해 EMA(지수이동평균)를 계산함."""
+        if not ohlcv:
+            return None
+
+        # CCXT 데이터를 DataFrame으로 변환
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+        # EMA 계산 (close 가격 기준)
+        df['ema'] = df['close'].ewm(span=span, adjust=False).mean()
+
+        # 가장 최근의 EMA 값 변환
+        return df['ema'].iloc[-1]
+
+    async def run_cycle(self):
+        """메인 실행 루프"""
+        print(f"--- 봇 시작: {self.symbol} 감시 중 ---")
+
+        try:
+            while True:
+                tasks = [self.process_exchange(name) for name in self.exchanges]
+                await asyncio.gather(*tasks)
+
+                print("-" * 50)
+                await asyncio.sleep(2)
+
+        except KeyboardInterrupt:
+            print("\n봇을 종료함.")
+        finally:
+            # 거래소 연결 종료 (필수)
+            for exchange in self.exchanges.values():
+                await exchange.close()
+
+    async def process_exchange(self, exchange_name):
+        """개별 거래소 로직 처리"""
+        price, ohlcv = await self.fetch_data(exchange_name)
+
+        if price and ohlcv:
+            ema = self.calculate_ema(ohlcv, span=20)    # 20EMA
+
+            # 추세 판단 로직 (간단 예시)
+            trend = "상승 🚀" if price > ema else "하락 📉"
+
+            now = datetime.now().strftime("%H:%M:%S")
+            print(f"[{now}] {exchange_name.upper():<7} | 현재가: {price: .2f} | EMA(20): {ema:.2f} | 추세: {trend}")
 ```
+
+#### 4. 코드 분석 및 핵심 포인트
+
+1. `ccxt.async_support`: 일반 `import ccxt`가 아닌 비동기 모듈을 사용했음. 이렇게 해서 바이낸스와 빙엑스의 데이터를 **동시에(Parallel)** 요청하여 속도를 높임.
+2. **선물 시장 설정**:
+   - Binance: `'options': {'defaultType':'future'}`
+   - BingX: `'options': {'defaultType': 'future'}`
+   - 이 설정이 없으면 현물 가격을 가져오게 됨.
+3. **EMA 계산**: `pandas`의 `ewm`(Exponential Weighted Moving) 함수를 사용하여 수학적으로 정확한 지수 이동 평균을 구함.
+4. **데이터 흐름**: `fetch_ohlcv`로 캔들 데이터를 받아와서 추세선(EMA)을 그리고, `fetch_ticker`로 현재가가 그 위에 있는지 아래에 있는지 판단함.
