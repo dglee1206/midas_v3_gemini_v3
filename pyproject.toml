@@ -3,4 +3,8 @@ name = "midas-v3-gemini-v3"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "ccxt==4.5.20",
+    "pandas==2.3.3",
+    "python-dotenv==1.2.1",
+]
