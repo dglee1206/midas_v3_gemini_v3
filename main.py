@@ -1,2 +1,7 @@
+import asyncio
+
+from crypto_bot import CryptoBot
+
 if __name__ == "__main__":
-    print("Hello Midas!")
+    bot = CryptoBot()
+    asyncio.run(bot.run_cycle())

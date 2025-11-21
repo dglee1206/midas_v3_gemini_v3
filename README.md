@@ -104,14 +104,14 @@ class CryptoBot:
         # 거래소 객체 초기화 (비동기 방식)
         self.exchanges = {
             "binance": ccxt.binance({
-                "apiKey": os.getenv("BINANCE_API_KEY"),
-                "secret": os.getenv("BINANCE_SECRET"),
+                "apiKey": os.environ.get("BINANCE_API_KEY", ""),
+                "secret": os.environ.get("BINANCE_SECRET", ""),
                 "enableRateLimit": True,    # API 차단 방지
                 "options": {'defaultType': 'future'}    # 선물 거래 설정
             }),
             "bingx": ccxt.bingx({
-                "apiKey": os.getenv("BINGX_API_KEY"),
-                "secret": os.getenv("BINGX_SECRET"),
+                "apiKey": os.environ.get("BINGX_API_KEY", ""),
+                "secret": os.environ.get("BINGX_SECRET", ""),
                 "enableRateLimit": True,
                 "options": {'defaultType': 'swap'}
             }),
