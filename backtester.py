@@ -202,51 +202,90 @@ class Backtester:
                         self._execute_trade(entry_time, index, 'SHORT', entry_price, current_price, 'LOSS')
                         position = None
 
-    def _execute_trade(self, entry_time, exit_time, side, entry_price, exit_price, result_type):
-        # # 실제 수익금 계산 (레버리지 적용, 수수료 차감)
-        # leverage = self.strategy.leverage
-        #
-        # # 수익률 (롱: 출-진 / 진, 숏: 진-출 / 진)
-        # raw_pnl_rate = (exit_price - entry_price) / entry_price if side == 'LONG' else (
-        #                                                                                            entry_price - exit_price) / entry_price
-        #
-        # # 레버리지 반영 수익률
-        # leveraged_pnl_rate = raw_pnl_rate * leverage
-        #
-        # # 수수료 차감 (진입 + 청산, 레버리지 전체 금액에 대해 부과됨에 주의)
-        # # 수수료는 (진입금액 * 레버리지 * 요율) + (청산금액 * 레버리지 * 요율)
-        # # 약식 계산: 전체 포지션 규모에 대해 약 2배의 수수료 발생
-        # total_fee = (self.taker_fee + self.taker_fee) * leverage
-        #
-        # final_pnl_rate = leveraged_pnl_rate - total_fee
-        #
-        # self.balance = self.balance * (1 + final_pnl_rate)
-        # self.trades.append({
-        #     'entry_time': entry_time,
-        #     'exit_time': exit_time,
-        #     'side': side,
-        #     'pnl_rate': final_pnl_rate,
-        #     'balance': self.balance
-        # })
+    # def _execute_trade(self, entry_time, exit_time, side, entry_price, exit_price, result_type):
+    #     # # 실제 수익금 계산 (레버리지 적용, 수수료 차감)
+    #     # leverage = self.strategy.leverage
+    #     #
+    #     # # 수익률 (롱: 출-진 / 진, 숏: 진-출 / 진)
+    #     # raw_pnl_rate = (exit_price - entry_price) / entry_price if side == 'LONG' else (
+    #     #                                                                                            entry_price - exit_price) / entry_price
+    #     #
+    #     # # 레버리지 반영 수익률
+    #     # leveraged_pnl_rate = raw_pnl_rate * leverage
+    #     #
+    #     # # 수수료 차감 (진입 + 청산, 레버리지 전체 금액에 대해 부과됨에 주의)
+    #     # # 수수료는 (진입금액 * 레버리지 * 요율) + (청산금액 * 레버리지 * 요율)
+    #     # # 약식 계산: 전체 포지션 규모에 대해 약 2배의 수수료 발생
+    #     # total_fee = (self.taker_fee + self.taker_fee) * leverage
+    #     #
+    #     # final_pnl_rate = leveraged_pnl_rate - total_fee
+    #     #
+    #     # self.balance = self.balance * (1 + final_pnl_rate)
+    #     # self.trades.append({
+    #     #     'entry_time': entry_time,
+    #     #     'exit_time': exit_time,
+    #     #     'side': side,
+    #     #     'pnl_rate': final_pnl_rate,
+    #     #     'balance': self.balance
+    #     # })
+    #
+    #     leverage = self.strategy.leverage
+    #
+    #     if side == 'LONG':
+    #         raw_pnl_rate = (exit_price - entry_price) / entry_price
+    #     else:
+    #         raw_pnl_rate = (entry_price - exit_price) / entry_price
+    #
+    #     leveraged_pnl_rate = raw_pnl_rate * leverage
+    #     total_fee = (self.taker_fee * 2) * leverage
+    #     final_pnl_rate = leveraged_pnl_rate - total_fee
+    #
+    #     self.balance = self.balance * (1 + final_pnl_rate)
+    #
+    #     self.trades.append({
+    #         'entry_time': entry_time,
+    #         'exit_time': exit_time,
+    #         'side': side,
+    #         'pnl_rate': final_pnl_rate,
+    #         'balance': self.balance
+    #     })
 
+    def _execute_trade(self, entry_time, exit_time, side, entry_price, exit_price, result_type):
         leverage = self.strategy.leverage
 
+        # [수정] 전체 잔고(balance)를 다 쓰는 게 아니라,
+        # 잔고의 20%만 증거금(Margin)으로 사용 (Risk Management)
+        bet_amount = self.balance * 0.2
+
+        # 수익률 계산
         if side == 'LONG':
             raw_pnl_rate = (exit_price - entry_price) / entry_price
         else:
             raw_pnl_rate = (entry_price - exit_price) / entry_price
 
+        # 레버리지 적용 수익률
         leveraged_pnl_rate = raw_pnl_rate * leverage
-        total_fee = (self.taker_fee * 2) * leverage
-        final_pnl_rate = leveraged_pnl_rate - total_fee
 
-        self.balance = self.balance * (1 + final_pnl_rate)
+        # 수수료 계산 (베팅 금액 기준)
+        # 진입(Maker) + 청산(Taker) 가정
+        fee_rate = (self.maker_fee + self.taker_fee) * leverage
+
+        # 최종 수익금 (PnL) = 베팅금액 * (수익률 - 수수료)
+        pnl_amount = bet_amount * (leveraged_pnl_rate - fee_rate)
+
+        # 잔고 업데이트
+        self.balance += pnl_amount
+
+        # 파산 방지 (잔고가 마이너스면 0 처리)
+        if self.balance < 0:
+            self.balance = 0
 
         self.trades.append({
             'entry_time': entry_time,
             'exit_time': exit_time,
             'side': side,
-            'pnl_rate': final_pnl_rate,
+            'pnl_rate': (leveraged_pnl_rate - fee_rate) * 100,
+            'realized_pnl': pnl_amount,
             'balance': self.balance
         })
 

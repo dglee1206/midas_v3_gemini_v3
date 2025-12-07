@@ -44,25 +44,53 @@ class DataLoader:
 
     def add_indicators(self):
         """스캘핑에 필요한 보조지표 추가"""
-        # # [수정] 데이터가 충분한지 확인
-        # if len(self.df) < 50:
-        #     print("🚨 데이터가 너무 적어서 EMA 50을 계산할 수 없습니다.")
+        # # # [수정] 데이터가 충분한지 확인
+        # # if len(self.df) < 50:
+        # #     print("🚨 데이터가 너무 적어서 EMA 50을 계산할 수 없습니다.")
+        # #     return self.df
+        # #
+        # # # 예시: EMA (지수이동평균) 및 RSI
+        # # self.df['EMA_10'] = self.df['Close'].ewm(span=10, adjust=False).mean()
+        # # self.df['EMA_50'] = self.df['Close'].ewm(span=50, adjust=False).mean()
+        #
+        # # 데이터가 비었는지 확인
+        # if self.df is None or len(self.df) < 50:
+        #     print("데이터가 부족합니다.")
         #     return self.df
         #
-        # # 예시: EMA (지수이동평균) 및 RSI
         # self.df['EMA_10'] = self.df['Close'].ewm(span=10, adjust=False).mean()
         # self.df['EMA_50'] = self.df['Close'].ewm(span=50, adjust=False).mean()
+        #
+        # # [추가] 지표가 잘 만들어졌는지 NaN 제거 전 확인
+        # # print(self.df[['Close', 'EMA_10', 'EMA_50']].head(60))
+        #
+        # # RSI 계산 등 추가 가능
+        # return self.df
 
-        # 데이터가 비었는지 확인
-        if self.df is None or len(self.df) < 50:
-            print("데이터가 부족합니다.")
+        # 데이터가 너무 적으면 계산 불가
+        if len(self.df) < 50:
             return self.df
 
+        # 1. EMA (지수이동평균) 계산
         self.df['EMA_10'] = self.df['Close'].ewm(span=10, adjust=False).mean()
         self.df['EMA_50'] = self.df['Close'].ewm(span=50, adjust=False).mean()
 
-        # [추가] 지표가 잘 만들어졌는지 NaN 제거 전 확인
-        # print(self.df[['Close', 'EMA_10', 'EMA_50']].head(60))
+        # 2. RSI (상대강도지수, 14일 기준) 계산 코드 추가
+        delta = self.df['Close'].diff()
 
-        # RSI 계산 등 추가 가능
+        # 상승분(up)과 하락분(down) 분리
+        up = delta.clip(lower=0)
+        down = -1 * delta.clip(upper=0)
+
+        # Wilder's Smoothing 방식을 적용한 이동평균 (RSI 표준 공식)
+        # com=13은 alpha=1/14와 같음 (14일 기간)
+        ma_up = up.ewm(com=13, adjust=False).mean()
+        ma_down = down.ewm(com=13, adjust=False).mean()
+
+        rs = ma_up / ma_down
+        self.df['RSI'] = 100 - (100 / (1 + rs))
+
+        # [디버깅] RSI가 잘 생성되었는지 확인하려면 아래 주석 해제
+        # print(self.df[['Close', 'RSI']].tail())
+
         return self.df

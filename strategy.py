@@ -29,6 +29,7 @@ class ScalpingStrategy:
         ema_50 = row['EMA_50']
         prev_ema_10 = row['prev_EMA_10']
         prev_ema_50 = row['prev_EMA_50']
+        rsi = row['RSI']  # 데이터 로더에 RSI가 있어야 함
 
         # [테스트] 봇이 작동하는지 확인하기 위해,
         # 100번째 캔들에서 무조건 매수 신호를 보내봅니다. (작동 여부 확인용)
@@ -36,24 +37,40 @@ class ScalpingStrategy:
         # if row.name.minute == 0 and row.name.hour == 0:  # 매일 0시 0분에 강제 매수 시도 (테스트)
         #     return 'LONG'
 
-        # 2. 골든크로스 (매수) 조건 상세 체크
-        # 조건: 10이 50보다 크고 + 이전에는 10이 50보다 작거나 같았어야 함
-        is_golden_cross = (ema_10 > ema_50) and (prev_ema_10 <= prev_ema_50)
+        # # 2. 골든크로스 (매수) 조건 상세 체크
+        # # 조건: 10이 50보다 크고 + 이전에는 10이 50보다 작거나 같았어야 함
+        # is_golden_cross = (ema_10 > ema_50) and (prev_ema_10 <= prev_ema_50)
+        #
+        # # 3. 데드크로스 (매도) 조건 상세 체크
+        # is_dead_cross = (ema_10 < ema_50) and (prev_ema_10 >= prev_ema_50)
+        #
+        # # [디버깅 로그] 교차하려는 움직임이 보이면 출력 (값이 너무 비슷하면 출력)
+        # diff = abs(ema_10 - ema_50)
+        # if diff > 0 and diff < 1.0:  # 차이가 1달러 미만일 때만 출력 (너무 자주 출력 방지)
+        #     print(f"[{row.name}] 🔍 접전 중.. E10:{ema_10:.2f} / E50:{ema_50:.2f} (차이: {diff:.4f})")
+        #
+        # if is_golden_cross:
+        #     print(f"🔥 [매수 신호 발견] {row.name} | E10이 E50을 돌파! ({prev_ema_10:.2f} -> {ema_10:.2f})")
+        #     return 'LONG'
+        #
+        # elif is_dead_cross:
+        #     print(f"💧 [매도 신호 발견] {row.name} | E10이 E50 하향 돌파! ({prev_ema_10:.2f} -> {ema_10:.2f})")
+        #     return 'SHORT'
 
-        # 3. 데드크로스 (매도) 조건 상세 체크
-        is_dead_cross = (ema_10 < ema_50) and (prev_ema_10 >= prev_ema_50)
+        # 골든크로스 (매수)
+        if (ema_10 > ema_50) and (prev_ema_10 <= prev_ema_50):
+            # [필터] RSI가 50 이상일 때만 진입 (상승세 확인)
+            if rsi > 50:
+                return 'LONG'
+            else:
+                print(f"   [필터링] 골든크로스지만 RSI가 약함 ({rsi:.2f}) -> 진입 포기")
 
-        # [디버깅 로그] 교차하려는 움직임이 보이면 출력 (값이 너무 비슷하면 출력)
-        diff = abs(ema_10 - ema_50)
-        if diff > 0 and diff < 1.0:  # 차이가 1달러 미만일 때만 출력 (너무 자주 출력 방지)
-            print(f"[{row.name}] 🔍 접전 중.. E10:{ema_10:.2f} / E50:{ema_50:.2f} (차이: {diff:.4f})")
-
-        if is_golden_cross:
-            print(f"🔥 [매수 신호 발견] {row.name} | E10이 E50을 돌파! ({prev_ema_10:.2f} -> {ema_10:.2f})")
-            return 'LONG'
-
-        elif is_dead_cross:
-            print(f"💧 [매도 신호 발견] {row.name} | E10이 E50 하향 돌파! ({prev_ema_10:.2f} -> {ema_10:.2f})")
-            return 'SHORT'
+        # 데드크로스 (매도)
+        elif (ema_10 < ema_50) and (prev_ema_10 >= prev_ema_50):
+            # [필터] RSI가 50 이하일 때만 진입 (하락세 확인)
+            if rsi < 50:
+                return 'SHORT'
+            else:
+                print(f"   [필터링] 데드크로스지만 RSI가 높음 ({rsi:.2f}) -> 진입 포기")
 
         return None
