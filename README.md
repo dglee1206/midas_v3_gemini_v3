@@ -191,3 +191,12 @@ class CryptoBot:
    - 이 설정이 없으면 현물 가격을 가져오게 됨.
 3. **EMA 계산**: `pandas`의 `ewm`(Exponential Weighted Moving) 함수를 사용하여 수학적으로 정확한 지수 이동 평균을 구함.
 4. **데이터 흐름**: `fetch_ohlcv`로 캔들 데이터를 받아와서 추세선(EMA)을 그리고, `fetch_ticker`로 현재가가 그 위에 있는지 아래에 있는지 판단함.
+
+---
+
+## 2025.12.07
+
+### 브랜치 생성
+- `rework_251207` 여기서부터 살살 다시 시작해보자.
+- <span style="color:red;font-weight: bold;">이번 작업의 핵심은 실매매 전에 백테스팅을 우선으로 한다.</span>
+
