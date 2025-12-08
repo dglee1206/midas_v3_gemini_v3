@@ -1,6 +1,7 @@
 """데이터를 불러오고 보조지표를 생성한다."""
 
 import pandas as pd
+import numpy as np
 
 class DataLoader:
     """캔들 데이터를 로드하고 전처리하는 클래스"""
@@ -9,76 +10,36 @@ class DataLoader:
         self.df = None
 
     def load_data(self):
-        # CSV 파일 로드 (컬럼명은 상황에 맞게 조정 필요: timestamp, open, high, low, close, volume)
         self.df = pd.read_csv(self.file_path)
-
-        # # self.df['timestamp'] = pd.to_datetime(self.df['timestamp'])
-        # self.df['OpenTime'] = pd.to_datetime(self.df['OpenTime'])
-        # # set_index() Pandas DataFrame에서 특정 열을 인덱스로 설정하는데 사용된다.
-        # # 이 함수를 사용하면 DataFrame의 기존 인덱스가 지정한 열로 대체된다.
-        # # inplace: DataFrame을 직접 수정할지 여부를 나타내는 불리언 값. True로 설정하면 DataFrame이 직접 수정된다.
-        # self.df.set_index('OpenTime', inplace=True)
-        # return self.df
-
-        # try:
-        #     self.df['Close'] = self.df['Close'].astype(float)
-        # except KeyError:
-        #     print("🚨 오류: CSV 파일에 'Close' 컬럼이 없습니다. 'close'인지 확인해보세요.")
-        #     return None
-        #
-        # self.df['OpenTime'] = pd.to_datetime(self.df['OpenTime'])
-        # self.df.set_index('OpenTime', inplace=True)
-        #
-        # # [수정] **매우 중요**: 데이터를 과거->현재 순으로 정렬
-        # self.df.sort_index(ascending=True, inplace=True)
-        #
-        # return self.df
-
-        # [핵심 수정] Close 컬럼을 강제로 숫자(float)로 변환 (에러 발생 시 NaN 처리)
         self.df['Close'] = pd.to_numeric(self.df['Close'], errors='coerce')
-
         self.df['OpenTime'] = pd.to_datetime(self.df['OpenTime'])
         self.df.set_index('OpenTime', inplace=True)
         self.df.sort_index(ascending=True, inplace=True)
+
+        # [핵심] 4시간봉(4H)으로 리샘플링
+        # 1시간봉 7만 개 -> 4시간봉 약 1.7만 개로 압축
+        ohlc_dict = {
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }
+        self.df = self.df.resample('4h').agg(ohlc_dict)
+        self.df.dropna(inplace=True)
+
         return self.df
 
     def add_indicators(self):
-        """스캘핑에 필요한 보조지표 추가"""
-        if len(self.df) < 50: return self.df
+        # 변동성 돌파 전략을 위한 'Range(변동폭)' 계산
+        # Range = 전 봉의 고가 - 전 봉의 저가
+        self.df['Prev_High'] = self.df['High'].shift(1)
+        self.df['Prev_Low'] = self.df['Low'].shift(1)
+        self.df['Prev_Close'] = self.df['Close'].shift(1)
+        self.df['Range'] = self.df['Prev_High'] - self.df['Prev_Low']
 
-        # 1. EMA
-        self.df['EMA_10'] = self.df['Close'].ewm(span=10, adjust=False).mean()
-        self.df['EMA_50'] = self.df['Close'].ewm(span=50, adjust=False).mean()
+        # 노이즈 필터용 이동평균선 (추세장일 때만 진입)
+        self.df['MA_50'] = self.df['Close'].rolling(window=50).mean()
 
-        # 2. RSI
-        delta = self.df['Close'].diff()
-        up, down = delta.clip(lower=0), -1 * delta.clip(upper=0)
-        ma_up = up.ewm(com=13, adjust=False).mean()
-        ma_down = down.ewm(com=13, adjust=False).mean()
-        rs = ma_up / ma_down
-        self.df['RSI'] = 100 - (100 / (1 + rs))
-
-        # 3. [신규 추가] ADX (추세 강도 지표)
-        # 횡보장을 거르기 위한 최고의 지표입니다.
-        plus_dm = self.df['High'].diff()
-        minus_dm = self.df['Low'].diff()
-        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
-        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
-
-        tr1 = self.df['High'] - self.df['Low']
-        tr2 = abs(self.df['High'] - self.df['Close'].shift(1))
-        tr3 = abs(self.df['Low'] - self.df['Close'].shift(1))
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-        atr = tr.ewm(alpha=1 / 14, adjust=False).mean()
-
-        # 0으로 나누기 방지
-        atr = atr.replace(0, 1)
-
-        plus_di = 100 * (plus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr)
-        minus_di = 100 * (minus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr)
-
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, 1)
-        self.df['ADX'] = dx.ewm(alpha=1 / 14, adjust=False).mean()
-
+        self.df.dropna(inplace=True)
         return self.df

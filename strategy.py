@@ -3,8 +3,12 @@
 - 고레버리지 스캘핑이므로 짧은 호흡의 로직이 필요하다.
 """
 class ScalpingStrategy:
-    def __init__(self, leverage = 50):
+    def __init__(self, leverage = 1):
+        # [중요] 레버리지 1배로 시작하세요.
+        # 이 전략은 승률로 먹는 게 아니라 '손익비'로 먹습니다.
+        # 수익이 나면 그때 레버리지를 올리세요.
         self.leverage = leverage
+        self.k = 0.5  # 돌파 계수
 
     def get_signal(self, row):
         """
@@ -12,28 +16,20 @@ class ScalpingStrategy:
         :param row:
         :return: 'LONG', "SHORT' or None
         """
+        current_price = row['Close']
+        open_price = row['Open']
 
-        ema_10, ema_50 = row['EMA_10'], row['EMA_50']
-        prev_10, prev_50 = row['prev_EMA_10'], row['prev_EMA_50']
-        rsi = row['RSI']
-        adx = row['ADX']  # [추가]
+        # 목표 매수가 = 시가 + (이전 변동폭 * 0.5)
+        # 즉, 오늘 힘이 좋아서 이 가격을 뚫고 올라가면 '상승세'로 간주
+        target_price = open_price + (row['Range'] * self.k)
 
-        # 🔥 [핵심 필터] ADX가 25 미만이면 '노잼 횡보장' -> 절대 거래 금지
-        if adx < 25:
-            return None
+        ma_50 = row['MA_50']
 
-        # 골든크로스 (매수)
-        if (ema_10 > ema_50) and (prev_10 <= prev_50):
-            # RSI가 50 이상이고, ADX가 살아있을 때만
-            if rsi > 50:
-                print(f"🚀 [강력 매수] RSI:{rsi:.1f} | ADX:{adx:.1f} (추세확실)")
-                return 'LONG'
-
-        # 데드크로스 (매도)
-        elif (ema_10 < ema_50) and (prev_10 >= prev_50):
-            # RSI가 50 이하이고, ADX가 살아있을 때만
-            if rsi < 50:
-                print(f"📉 [강력 매도] RSI:{rsi:.1f} | ADX:{adx:.1f} (하락확실)")
-                return 'SHORT'
+        # [롱 진입 조건]
+        # 1. 현재가가 목표가를 돌파했는가?
+        # 2. 이동평균선 위에 있는가? (상승장 필터)
+        # 3. 양봉인가?
+        if current_price > target_price and current_price > ma_50 and current_price > open_price:
+            return 'LONG'
 
         return None
