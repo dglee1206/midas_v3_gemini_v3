@@ -35,40 +35,107 @@ class Backtester:
         entry_price = 0
         entry_time = None
 
-        print(f"백테스팅 시작 (4시간봉 변동성 돌파): {len(self.df)}개 캔들")
+        # SL/TP 가격
+        sl_price = 0
+
+        # 진입 수량 (코인 개수)
+        qty = 0
+
+        self.df.dropna(inplace=True)
+        print(f"백테스팅 시작 (돈키안 돌파 + 2% 룰): {len(self.df)}개 캔들")
 
         for index, row in self.df.iterrows():
             current_price = row['Close']
+            atr = row['ATR']
 
-            # -----------------------------------
-            # 1. 포지션이 없을 때 (진입 시도)
-            # -----------------------------------
+            # ---------------------------
+            # 1. 진입 (포지션 없을 때)
+            # ---------------------------
             if position is None:
                 signal = self.strategy.get_signal(row)
 
-                if signal == 'LONG':
-                    # 자금 관리: 변동성 돌파는 승률이 40~50% 정도입니다.
-                    # 대신 터질 때 크게 먹습니다. 시드의 5% 정도만 진입하거나
-                    # 레버리지 1배라면 100% 진입해도 안전합니다.
-                    bet_ratio = 1.0
+                if signal:
+                    # [핵심] 자금 관리 로직
+                    # 내 잔고의 2%만 리스크로 건다 (Risk per Trade = 2%)
+                    risk_amount = self.balance * 0.02
 
-                    position = 'LONG'
+                    # 손절폭은 ATR의 3배로 넉넉하게 잡음 (휩소 방지)
+                    stop_loss_dist = atr * 3.0
 
-                    # 진입가는 '현재가'가 아니라 우리가 정한 '목표가'여야 정확하지만
-                    # 백테스팅 편의상 종가(Close)로 진입했다고 가정하거나
-                    # 보수적으로 High와 Close의 중간값 등을 쓸 수 있습니다.
-                    # 여기선 Close로 진입합니다.
+                    if stop_loss_dist == 0: continue
+
+                    # 내가 감당할 수 있는 수량 계산
+                    # 수량 = 리스크 금액 / 코인당 손절폭
+                    qty = risk_amount / stop_loss_dist
+
+                    # 진입 금액 (Notional Value)
+                    position_value = qty * current_price
+
+                    # (옵션) 최대 레버리지 제한 (예: 3배까지만 허용)
+                    if position_value > self.balance * 3:
+                        qty = (self.balance * 3) / current_price
+
+                    position = signal
                     entry_price = current_price
                     entry_time = index
 
-            # -----------------------------------
-            # 2. 포지션 보유 중 (무조건 청산)
-            # -----------------------------------
+                    # 손절가 설정
+                    if position == 'LONG':
+                        sl_price = entry_price - stop_loss_dist
+                    else:
+                        sl_price = entry_price + stop_loss_dist
+
+            # ---------------------------
+            # 2. 청산 (트레일링 스탑)
+            # ---------------------------
             else:
-                # 4시간이 지났으므로 무조건 청산 (Time Cut)
-                # 오버나잇 리스크 제거 + 다음 기회 탐색
-                self._execute_trade(entry_time, index, 'LONG', entry_price, current_price, 'Time_Cut')
-                position = None
+                exit_signal = False
+                exit_type = None
+
+                # 트레일링 스탑: ATR 2배만큼 이익을 따라가며 손절 라인을 올림
+                if position == 'LONG':
+                    # 현재가 기준 ATR 3배 밑을 새로운 손절라인으로 계속 업데이트
+                    new_sl = current_price - (atr * 3.0)
+                    if new_sl > sl_price:
+                        sl_price = new_sl
+
+                    # 손절가 건드리면 청산 (익절일 수도 있고 손절일 수도 있음)
+                    if current_price <= sl_price:
+                        exit_signal = True;
+                        exit_type = 'Exit'
+
+                elif position == 'SHORT':
+                    new_sl = current_price + (atr * 3.0)
+                    if new_sl < sl_price:
+                        sl_price = new_sl
+
+                    if current_price >= sl_price:
+                        exit_signal = True;
+                        exit_type = 'Exit'
+
+                if exit_signal:
+                    # 수익 계산 로직 수정 (수량 기준)
+                    # PnL = (출구가 - 입구가) * 수량
+                    if position == 'LONG':
+                        pnl_amount = (current_price - entry_price) * qty
+                    else:
+                        pnl_amount = (entry_price - current_price) * qty
+
+                    # 수수료 차감 (진입/청산 0.1% 가정, 전체 포지션 크기 기준)
+                    fee = (entry_price * qty + current_price * qty) * 0.001
+                    final_pnl = pnl_amount - fee
+
+                    self.balance += final_pnl
+
+                    # 거래 기록
+                    self.trades.append({
+                        'time': index,
+                        'pnl_amount': final_pnl,
+                        'balance': self.balance
+                    })
+
+                    position = None
+                    qty = 0
 
     def _execute_trade(self, entry_time, exit_time, side, entry_price, exit_price, result_type):
         leverage = self.strategy.leverage

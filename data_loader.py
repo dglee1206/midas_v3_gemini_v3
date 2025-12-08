@@ -16,8 +16,7 @@ class DataLoader:
         self.df.set_index('OpenTime', inplace=True)
         self.df.sort_index(ascending=True, inplace=True)
 
-        # [핵심] 4시간봉(4H)으로 리샘플링
-        # 1시간봉 7만 개 -> 4시간봉 약 1.7만 개로 압축
+        # 4시간봉 리샘플링
         ohlc_dict = {
             'Open': 'first',
             'High': 'max',
@@ -27,19 +26,24 @@ class DataLoader:
         }
         self.df = self.df.resample('4h').agg(ohlc_dict)
         self.df.dropna(inplace=True)
-
         return self.df
 
     def add_indicators(self):
-        # 변동성 돌파 전략을 위한 'Range(변동폭)' 계산
-        # Range = 전 봉의 고가 - 전 봉의 저가
-        self.df['Prev_High'] = self.df['High'].shift(1)
-        self.df['Prev_Low'] = self.df['Low'].shift(1)
-        self.df['Prev_Close'] = self.df['Close'].shift(1)
-        self.df['Range'] = self.df['Prev_High'] - self.df['Prev_Low']
+        # 1. EMA 200 (추세 필터)
+        self.df['EMA_200'] = self.df['Close'].ewm(span=200, adjust=False).mean()
 
-        # 노이즈 필터용 이동평균선 (추세장일 때만 진입)
-        self.df['MA_50'] = self.df['Close'].rolling(window=50).mean()
+        # 2. 돈키안 채널 (20일 = 4시간봉 120개) - 추세 돌파용
+        window = 120
+        self.df['Donchian_High'] = self.df['High'].rolling(window=window).max().shift(1)
+        self.df['Donchian_Low'] = self.df['Low'].rolling(window=window).min().shift(1)
+
+        # 3. ATR (변동성 계산) - 자금 관리의 핵심
+        high_low = self.df['High'] - self.df['Low']
+        high_close = np.abs(self.df['High'] - self.df['Close'].shift())
+        low_close = np.abs(self.df['Low'] - self.df['Close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = np.max(ranges, axis=1)
+        self.df['ATR'] = true_range.ewm(alpha=1 / 20, min_periods=20).mean()
 
         self.df.dropna(inplace=True)
         return self.df
