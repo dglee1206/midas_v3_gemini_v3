@@ -32,110 +32,134 @@ class Backtester:
 
     def run(self):
         position = None
-        entry_price = 0
-        entry_time = None
+        avg_entry_price = 0  # 평단가
+        qty = 0  # 총 보유 수량
 
-        # SL/TP 가격
+        entry_time = None
         sl_price = 0
 
-        # 진입 수량 (코인 개수)
-        qty = 0
+        # 피라미딩 관련 변수
+        pyramid_count = 0  # 불타기 횟수 (0: 최초진입, 1: 1차추가...)
+        last_add_price = 0  # 마지막으로 진입한 가격
 
         self.df.dropna(inplace=True)
-        print(f"백테스팅 시작 (돈키안 돌파 + 2% 룰): {len(self.df)}개 캔들")
+        print(f"백테스팅 시작 (피라미딩 불타기 🔥): {len(self.df)}개 캔들")
 
         for index, row in self.df.iterrows():
             current_price = row['Close']
             atr = row['ATR']
 
             # ---------------------------
-            # 1. 진입 (포지션 없을 때)
+            # 1. 포지션 없을 때 (신규 진입)
             # ---------------------------
             if position is None:
                 signal = self.strategy.get_signal(row)
 
                 if signal:
-                    # [핵심] 자금 관리 로직
-                    # 내 잔고의 2%만 리스크로 건다 (Risk per Trade = 2%)
+                    # 최초 진입: 시드의 2% 리스크 (ATR 3배 손절 기준)
                     risk_amount = self.balance * 0.02
-
-                    # 손절폭은 ATR의 3배로 넉넉하게 잡음 (휩소 방지)
                     stop_loss_dist = atr * 3.0
 
                     if stop_loss_dist == 0: continue
 
-                    # 내가 감당할 수 있는 수량 계산
-                    # 수량 = 리스크 금액 / 코인당 손절폭
+                    # 수량 계산
                     qty = risk_amount / stop_loss_dist
 
-                    # 진입 금액 (Notional Value)
-                    position_value = qty * current_price
-
-                    # (옵션) 최대 레버리지 제한 (예: 3배까지만 허용)
-                    if position_value > self.balance * 3:
+                    # (안전장치) 레버리지 3배 초과 금지
+                    if (qty * current_price) > (self.balance * 3):
                         qty = (self.balance * 3) / current_price
 
                     position = signal
-                    entry_price = current_price
+                    avg_entry_price = current_price
+                    last_add_price = current_price
                     entry_time = index
+                    pyramid_count = 0  # 카운트 초기화
 
                     # 손절가 설정
                     if position == 'LONG':
-                        sl_price = entry_price - stop_loss_dist
+                        sl_price = avg_entry_price - stop_loss_dist
                     else:
-                        sl_price = entry_price + stop_loss_dist
+                        sl_price = avg_entry_price + stop_loss_dist
 
             # ---------------------------
-            # 2. 청산 (트레일링 스탑)
+            # 2. 포지션 보유 중 (관리: 불타기 & 청산)
             # ---------------------------
             else:
                 exit_signal = False
                 exit_type = None
 
-                # 트레일링 스탑: ATR 2배만큼 이익을 따라가며 손절 라인을 올림
-                if position == 'LONG':
-                    # 현재가 기준 ATR 3배 밑을 새로운 손절라인으로 계속 업데이트
-                    new_sl = current_price - (atr * 3.0)
-                    if new_sl > sl_price:
-                        sl_price = new_sl
+                # --- [피라미딩 로직: 불타기] ---
+                # 조건: 현재가가 마지막 진입가보다 1 ATR 이상 유리해졌고, 3번 미만으로 불타기 했으면 추가 진입
+                if pyramid_count < 3:
+                    should_add = False
+                    if position == 'LONG' and current_price > last_add_price + (atr * 1.0):
+                        should_add = True
+                    elif position == 'SHORT' and current_price < last_add_price - (atr * 1.0):
+                        should_add = True
 
-                    # 손절가 건드리면 청산 (익절일 수도 있고 손절일 수도 있음)
+                    if should_add:
+                        # 추가 진입은 최초 진입 수량의 50%만 (피라미드 구조)
+                        add_qty = qty * 0.5
+
+                        # 평단가 갱신
+                        new_total_qty = qty + add_qty
+                        avg_entry_price = ((avg_entry_price * qty) + (current_price * add_qty)) / new_total_qty
+                        qty = new_total_qty
+
+                        last_add_price = current_price
+                        pyramid_count += 1
+
+                        # [중요] 손절 라인 끌어올리기 (Trailing)
+                        # 불타기를 했으니 이미 수익권임. 손절 라인을 평단가 근처로 올려서 리스크 제거
+                        if position == 'LONG':
+                            sl_price = avg_entry_price - (atr * 1.5)  # 손절폭을 3.0 -> 1.5로 좁힘
+                        else:
+                            sl_price = avg_entry_price + (atr * 1.5)
+
+                        # print(f"🔥 [불타기 {pyramid_count}차] {index} | 평단가: {avg_entry_price:.2f}")
+
+                # --- [청산 로직: 트레일링 스탑] ---
+                if position == 'LONG':
+                    # 트레일링 스탑: ATR 3배 거리 유지
+                    new_sl = current_price - (atr * 3.0)
+                    if new_sl > sl_price: sl_price = new_sl
+
                     if current_price <= sl_price:
                         exit_signal = True;
                         exit_type = 'Exit'
 
                 elif position == 'SHORT':
                     new_sl = current_price + (atr * 3.0)
-                    if new_sl < sl_price:
-                        sl_price = new_sl
+                    if new_sl < sl_price: sl_price = new_sl
 
                     if current_price >= sl_price:
                         exit_signal = True;
                         exit_type = 'Exit'
 
                 if exit_signal:
-                    # 수익 계산 로직 수정 (수량 기준)
-                    # PnL = (출구가 - 입구가) * 수량
+                    # 수익 계산
                     if position == 'LONG':
-                        pnl_amount = (current_price - entry_price) * qty
+                        pnl_amount = (current_price - avg_entry_price) * qty
                     else:
-                        pnl_amount = (entry_price - current_price) * qty
+                        pnl_amount = (avg_entry_price - current_price) * qty
 
-                    # 수수료 차감 (진입/청산 0.1% 가정, 전체 포지션 크기 기준)
-                    fee = (entry_price * qty + current_price * qty) * 0.001
+                    # 수수료 차감 (진입/청산 0.1% 가정)
+                    notional_value = avg_entry_price * qty
+                    fee = (notional_value + (current_price * qty)) * 0.001
                     final_pnl = pnl_amount - fee
 
                     self.balance += final_pnl
 
-                    # 거래 기록
                     self.trades.append({
                         'time': index,
                         'pnl_amount': final_pnl,
-                        'balance': self.balance
+                        'balance': self.balance,
+                        'pyramids': pyramid_count  # 몇 번 불탔는지 기록
                     })
 
                     position = None
                     qty = 0
+                    pyramid_count = 0
 
     def _execute_trade(self, entry_time, exit_time, side, entry_price, exit_price, result_type):
         leverage = self.strategy.leverage
