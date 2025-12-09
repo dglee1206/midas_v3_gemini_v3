@@ -111,7 +111,8 @@ class Backtester:
                 stop_loss_dist = prev_row['ATR'] * 3.0  # ATR은 신호 뜬 시점 기준
 
                 if stop_loss_dist > 0:
-                    risk_amount = self.balance * 0.02
+                    # risk_amount = self.balance * 0.02
+                    risk_amount = self.balance * 0.04
                     qty = risk_amount / stop_loss_dist
 
                     # 레버리지 3배 제한
